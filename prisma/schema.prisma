@@ -1,0 +1,115 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Category {
+  Entrepreneur
+  Subcontractor
+  SME
+  HR
+  C_Level
+}
+
+enum Source {
+  upwork
+  linkedin
+  clutch
+  crunchbase
+  producthunt
+  glassdoor
+  indeed
+  others
+}
+
+enum Status {
+  new
+  data_refined
+  use_in_campaign
+  pitch
+}
+
+enum UserRole {
+  admin
+  user
+}
+
+model LinkedInProfile {
+  id         String   @id @default(uuid())
+  name       String   @unique // e.g. "Sabeeh - CTO"
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
+
+model User {
+  id            String      @id @default(uuid())
+  email         String      @unique
+  name          String?
+  password_hash String?     // Will be used when auth is implemented
+  role          UserRole    @default(user)
+  created_at    DateTime    @default(now())
+  updated_at    DateTime    @updatedAt
+  
+  prospects     Prospect[]
+  
+  @@index([email])
+  @@index([role])
+}
+
+model Prospect {
+  id                    String    @id @default(uuid())
+  
+  // Your defined columns
+  category              Category?
+  name                  String?
+  email                 String?
+  number                String?   // Phone number
+  company_name          String?
+  website_link          String?
+  sources               Source?   // Data source
+  intent                String?   // Intent (hiring individual, looking for dev services, etc.)
+  intent_date           DateTime?
+  linkedin_connection_flag Boolean? @default(false)
+  status                Status    @default(new)
+  pitch_description     String?
+  pitched_source        String?   // linkedin, email, number
+  user_id               String
+  about_prospect        String?
+  
+  // Recommended additional columns
+  created_at            DateTime  @default(now())
+  updated_at            DateTime  @updatedAt
+  last_contacted_at     DateTime?
+  next_follow_up_date   DateTime?
+  campaign_name         String?
+  campaign_added_date   DateTime?
+  email_opened          Boolean?  @default(false)
+  email_clicked         Boolean?  @default(false)
+  email_replied         Boolean?  @default(false)
+  priority              String?   // high, medium, low
+  lead_score            Int?
+  linkedin_url          String?
+  data_refined_date     DateTime?
+  pitch_date            DateTime?
+  pitch_response        String?   // positive, negative, no_response, interested
+  job_title             String?
+  company_size          String?
+  location              String?
+
+  // Relation to User
+  user                  User       @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([status])
+  @@index([category])
+  @@index([sources])
+  @@index([created_at])
+}
