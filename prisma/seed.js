@@ -22,30 +22,40 @@ async function main() {
   }
   console.log('✅ LinkedIn profiles seeded:', LINKEDIN_PROFILES.map((p) => p.name).join(', '));
 
-  // Check if admin user already exists
-  const existingAdmin = await prisma.user.findUnique({
-    where: { email: 'admin@prospectmanager.com' }
-  });
-
-  if (existingAdmin) {
-    console.log('Admin user already exists, skipping user seed.');
+  // Default user ID the extension uses - must exist for prospect creation
+  const DEFAULT_ADMIN_USER_ID = 'aef5e700-1401-4e3f-bd54-5be9d645df0f';
+  let adminUser = await prisma.user.findUnique({ where: { id: DEFAULT_ADMIN_USER_ID } });
+  if (adminUser) {
+    console.log('✅ Default extension user already exists:', adminUser.email);
   } else {
-    const adminUser = await prisma.user.create({
-      data: {
-        email: 'admin@prospectmanager.com',
-        name: 'Admin User',
-        role: 'admin',
-        password_hash: null // Will be set when auth is implemented
-      }
+    const existingByEmail = await prisma.user.findUnique({
+      where: { email: 'admin@prospectmanager.com' }
     });
-    console.log('✅ Admin user created:', {
-      id: adminUser.id,
-      email: adminUser.email,
-      role: adminUser.role
-    });
-    console.log('📝 Admin User ID:', adminUser.id);
-    console.log('💡 Use this user_id when creating prospects from extension');
+    if (existingByEmail) {
+      await prisma.user.create({
+        data: {
+          id: DEFAULT_ADMIN_USER_ID,
+          email: 'extension@prospectmanager.com',
+          name: 'Extension Default User',
+          role: 'admin',
+          password_hash: null
+        }
+      });
+      console.log('✅ Extension default user created (admin@ already existed with another id)');
+    } else {
+      adminUser = await prisma.user.create({
+        data: {
+          id: DEFAULT_ADMIN_USER_ID,
+          email: 'admin@prospectmanager.com',
+          name: 'Admin User',
+          role: 'admin',
+          password_hash: null
+        }
+      });
+      console.log('✅ Admin user created:', adminUser.email);
+    }
   }
+  console.log('💡 Extension uses user_id:', DEFAULT_ADMIN_USER_ID);
 
   console.log('✅ Seed completed successfully!');
 }
