@@ -42,6 +42,12 @@ enum UserRole {
   user
 }
 
+enum LinkedInConnection {
+  none
+  invite
+  connected
+}
+
 model LinkedInProfile {
   id         String   @id @default(uuid())
   name       String   @unique // e.g. "Sabeeh - CTO"
@@ -71,13 +77,12 @@ model Prospect {
   category              Category?
   name                  String?
   email                 String?
-  number                String?   // Phone number
   company_name          String?
   website_link          String?
   sources               Source?   // Data source
   intent                String?   // Intent (hiring individual, looking for dev services, etc.)
   intent_date           DateTime?
-  linkedin_connection_flag Boolean? @default(false)
+  linkedin_connection   LinkedInConnection? @default(none)
   status                Status    @default(new)
   pitch_description     String?
   pitched_source        String?   // linkedin, email, number
