@@ -37,7 +37,7 @@ async function main() {
           id: DEFAULT_ADMIN_USER_ID,
           email: 'extension@prospectmanager.com',
           name: 'Extension Default User',
-          role: 'admin',
+          role: 'Admin',
           password_hash: null
         }
       });
@@ -48,7 +48,7 @@ async function main() {
           id: DEFAULT_ADMIN_USER_ID,
           email: 'admin@prospectmanager.com',
           name: 'Admin User',
-          role: 'admin',
+          role: 'Admin',
           password_hash: null
         }
       });

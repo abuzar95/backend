@@ -38,8 +38,10 @@ enum Status {
 }
 
 enum UserRole {
-  admin
-  user
+  DC_R
+  LNCtoLC
+  Pitcher
+  Admin
 }
 
 enum LinkedInConnection {
@@ -60,7 +62,7 @@ model User {
   email         String      @unique
   name          String?
   password_hash String?     // Will be used when auth is implemented
-  role          UserRole    @default(user)
+  role          UserRole    @default(DC_R)
   created_at    DateTime    @default(now())
   updated_at    DateTime    @updatedAt
   

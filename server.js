@@ -50,6 +50,24 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Backend is running' });
 });
 
+// Login - email-based (no password for now)
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email is required' });
+    const user = await prisma.user.findUnique({
+      where: { email: email.trim().toLowerCase() },
+      select: { id: true, email: true, name: true, role: true, created_at: true }
+    });
+    if (!user) {
+      return res.status(401).json({ error: 'No account found with this email' });
+    }
+    res.json(user);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get all users
 app.get('/api/users', async (req, res) => {
   try {
@@ -93,6 +111,66 @@ app.get('/api/users/:id', async (req, res) => {
     res.json(user);
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Create user
+app.post('/api/users', async (req, res) => {
+  try {
+    const { email, name, role } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email is required' });
+    const user = await prisma.user.create({
+      data: { email, name: name || null, role: role || 'DC_R' },
+      select: { id: true, email: true, name: true, role: true, created_at: true }
+    });
+    res.status(201).json(user);
+  } catch (error) {
+    if (error.code === 'P2002') {
+      res.status(409).json({ error: 'A user with this email already exists' });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
+// Update user
+app.put('/api/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { email, name, role } = req.body;
+    const data = {};
+    if (email !== undefined) data.email = email;
+    if (name !== undefined) data.name = name;
+    if (role !== undefined) data.role = role;
+    const user = await prisma.user.update({
+      where: { id },
+      data,
+      select: { id: true, email: true, name: true, role: true, created_at: true }
+    });
+    res.json(user);
+  } catch (error) {
+    if (error.code === 'P2025') {
+      res.status(404).json({ error: 'User not found' });
+    } else if (error.code === 'P2002') {
+      res.status(409).json({ error: 'A user with this email already exists' });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
+// Delete user
+app.delete('/api/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await prisma.user.delete({ where: { id } });
+    res.json({ success: true });
+  } catch (error) {
+    if (error.code === 'P2025') {
+      res.status(404).json({ error: 'User not found' });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
   }
 });
 
