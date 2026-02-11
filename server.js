@@ -5,15 +5,13 @@ import dotenv from 'dotenv';
 // Load environment variables FIRST before importing Prisma
 dotenv.config();
 
-// Verify required environment variables
+// Verify required environment variables (warn but don't crash for serverless)
 if (!process.env.DATABASE_URL) {
-  console.error('ERROR: DATABASE_URL is not set in .env file');
-  process.exit(1);
+  console.error('WARNING: DATABASE_URL is not set');
 }
 
 if (!process.env.DIRECT_URL) {
-  console.error('ERROR: DIRECT_URL is not set in .env file');
-  process.exit(1);
+  console.error('WARNING: DIRECT_URL is not set');
 }
 
 // Import Prisma client after env vars are loaded
@@ -29,8 +27,12 @@ app.use(cors({
     // Allow requests with no origin (like mobile apps, Postman, or chrome extensions)
     if (!origin) return callback(null, true);
     
-    // Check if origin is in allowed list
-    if (allowedOrigins.includes(origin) || origin.startsWith('chrome-extension://')) {
+    // Check if origin is in allowed list or is a known pattern
+    if (
+      allowedOrigins.includes(origin) ||
+      origin.startsWith('chrome-extension://') ||
+      origin.endsWith('.vercel.app')
+    ) {
       return callback(null, true);
     }
     
@@ -236,8 +238,13 @@ app.put('/api/prospects/:id', async (req, res) => {
   }
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`Backend server running on http://localhost:${PORT}`);
-  console.log(`Health check: http://localhost:${PORT}/api/health`);
-});
+// Start server (only in non-serverless / local dev)
+if (process.env.VERCEL !== '1') {
+  app.listen(PORT, () => {
+    console.log(`Backend server running on http://localhost:${PORT}`);
+    console.log(`Health check: http://localhost:${PORT}/api/health`);
+  });
+}
+
+// Export for Vercel serverless
+export default app;
