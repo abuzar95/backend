@@ -35,13 +35,19 @@ enum Status {
   data_refined
   use_in_campaign
   pitch
+  LNC
+  B_LNC
+  LC
+  B_LC
+  COMMUNICATION
+  TRASH
 }
 
 enum UserRole {
+  admin
   DC_R
-  LNCtoLC
-  Pitcher
-  Admin
+  LH
+  EM
 }
 
 enum LinkedInConnection {
@@ -50,26 +56,48 @@ enum LinkedInConnection {
   connected
 }
 
+enum IntentCategory {
+  Individual
+  Business
+  Both
+}
+
 model LinkedInProfile {
-  id         String   @id @default(uuid())
-  name       String   @unique // e.g. "Sabeeh - CTO"
-  created_at DateTime @default(now())
-  updated_at DateTime @updatedAt
+  id         String          @id @default(uuid())
+  name       String          @unique // e.g. "Sabeeh - CTO"
+  niche      IntentCategory? // Individual, Business, Both — matches intent category
+  created_at DateTime        @default(now())
+  updated_at DateTime        @updatedAt
+
+  users      User[]          // Users linked to this profile
+  prospects  Prospect[]      // Prospects linked to this profile
 }
 
 model User {
-  id            String      @id @default(uuid())
-  email         String      @unique
-  name          String?
-  password_hash String?     // Will be used when auth is implemented
-  role          UserRole    @default(DC_R)
-  created_at    DateTime    @default(now())
-  updated_at    DateTime    @updatedAt
+  id                   String           @id @default(uuid())
+  email                String           @unique
+  name                 String?
+  password_hash        String?          // Will be used when auth is implemented
+  role                 UserRole         @default(DC_R)
+  linkedin_profile_id  String?          // Required when role is LH
+  created_at           DateTime         @default(now())
+  updated_at           DateTime         @updatedAt
   
-  prospects     Prospect[]
+  linkedin_profile     LinkedInProfile? @relation(fields: [linkedin_profile_id], references: [id])
+  prospects            Prospect[]       @relation("ProspectCreator")
+  lh_prospects         Prospect[]       @relation("ProspectLH")
+  em_prospects         Prospect[]       @relation("ProspectEM")
   
   @@index([email])
   @@index([role])
+  @@index([linkedin_profile_id])
+}
+
+model Skill {
+  id         String   @id @default(uuid())
+  name       String   @unique
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
 }
 
 model Prospect {
@@ -82,13 +110,18 @@ model Prospect {
   company_name          String?
   website_link          String?
   sources               Source?   // Data source
-  intent                String?   // Intent (hiring individual, looking for dev services, etc.)
+  intent_skills         String[]  // Array of intent skill tags
+  intent_category       IntentCategory? // Individual, Business, Both
+  intent_proof_link     String?   // Link to proof of intent
   intent_date           DateTime?
   linkedin_connection   LinkedInConnection? @default(none)
   status                Status    @default(new)
   pitch_description     String?
   pitched_source        String?   // linkedin, email, number
   user_id               String
+  lh_user_id            String?   // Assigned LH user
+  em_user_id            String?   // Assigned EM user
+  linkedin_profile_id   String?   // Assigned LinkedIn profile
   about_prospect        String?
   
   // Recommended additional columns
@@ -111,10 +144,16 @@ model Prospect {
   company_size          String?
   location              String?
 
-  // Relation to User
-  user                  User       @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  // Relations
+  user                  User              @relation("ProspectCreator", fields: [user_id], references: [id], onDelete: Cascade)
+  lh_user               User?             @relation("ProspectLH", fields: [lh_user_id], references: [id])
+  em_user               User?             @relation("ProspectEM", fields: [em_user_id], references: [id])
+  linkedin_profile      LinkedInProfile?  @relation(fields: [linkedin_profile_id], references: [id])
 
   @@index([user_id])
+  @@index([lh_user_id])
+  @@index([em_user_id])
+  @@index([linkedin_profile_id])
   @@index([status])
   @@index([category])
   @@index([sources])

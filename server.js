@@ -70,20 +70,22 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+const USER_SELECT = {
+  id: true,
+  email: true,
+  name: true,
+  role: true,
+  linkedin_profile_id: true,
+  linkedin_profile: { select: { id: true, name: true, niche: true } },
+  created_at: true
+};
+
 // Get all users
 app.get('/api/users', async (req, res) => {
   try {
     const users = await prisma.user.findMany({
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        created_at: true
-      },
-      orderBy: {
-        created_at: 'desc'
-      }
+      select: USER_SELECT,
+      orderBy: { created_at: 'desc' }
     });
     res.json(users);
   } catch (error) {
@@ -97,13 +99,7 @@ app.get('/api/users/:id', async (req, res) => {
     const { id } = req.params;
     const user = await prisma.user.findUnique({
       where: { id },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        created_at: true
-      }
+      select: USER_SELECT
     });
     
     if (!user) {
@@ -119,11 +115,20 @@ app.get('/api/users/:id', async (req, res) => {
 // Create user
 app.post('/api/users', async (req, res) => {
   try {
-    const { email, name, role } = req.body;
+    const { email, name, role, linkedin_profile_id } = req.body;
     if (!email) return res.status(400).json({ error: 'Email is required' });
+    if (role === 'LH' && !linkedin_profile_id) {
+      return res.status(400).json({ error: 'LinkedIn Profile is required for LH role' });
+    }
+    const data = {
+      email,
+      name: name || null,
+      role: role || 'DC_R',
+      linkedin_profile_id: linkedin_profile_id || null
+    };
     const user = await prisma.user.create({
-      data: { email, name: name || null, role: role || 'DC_R' },
-      select: { id: true, email: true, name: true, role: true, created_at: true }
+      data,
+      select: USER_SELECT
     });
     res.status(201).json(user);
   } catch (error) {
@@ -139,15 +144,20 @@ app.post('/api/users', async (req, res) => {
 app.put('/api/users/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { email, name, role } = req.body;
+    const { email, name, role, linkedin_profile_id } = req.body;
+    // If updating to LH, linkedin_profile_id must be provided (or already set)
+    if (role === 'LH' && linkedin_profile_id === null) {
+      return res.status(400).json({ error: 'LinkedIn Profile is required for LH role' });
+    }
     const data = {};
     if (email !== undefined) data.email = email;
     if (name !== undefined) data.name = name;
     if (role !== undefined) data.role = role;
+    if (linkedin_profile_id !== undefined) data.linkedin_profile_id = linkedin_profile_id || null;
     const user = await prisma.user.update({
       where: { id },
       data,
-      select: { id: true, email: true, name: true, role: true, created_at: true }
+      select: USER_SELECT
     });
     res.json(user);
   } catch (error) {
@@ -176,6 +186,184 @@ app.delete('/api/users/:id', async (req, res) => {
   }
 });
 
+// ==================== LINKEDIN PROFILES ====================
+
+// Get all LinkedIn profiles
+app.get('/api/linkedin-profiles', async (req, res) => {
+  try {
+    const profiles = await prisma.linkedInProfile.findMany({
+      orderBy: { name: 'asc' }
+    });
+    res.json(profiles);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get LinkedIn profile by ID
+app.get('/api/linkedin-profiles/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const profile = await prisma.linkedInProfile.findUnique({ where: { id } });
+    if (!profile) {
+      return res.status(404).json({ error: 'LinkedIn profile not found' });
+    }
+    res.json(profile);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create LinkedIn profile
+app.post('/api/linkedin-profiles', async (req, res) => {
+  try {
+    const { name, niche } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: 'Profile name is required' });
+    }
+    const data = { name: name.trim() };
+    if (niche) data.niche = niche;
+    const profile = await prisma.linkedInProfile.create({ data });
+    res.status(201).json(profile);
+  } catch (error) {
+    if (error.code === 'P2002') {
+      res.status(409).json({ error: 'A LinkedIn profile with this name already exists' });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
+// Update LinkedIn profile
+app.put('/api/linkedin-profiles/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, niche } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: 'Profile name is required' });
+    }
+    const data = { name: name.trim() };
+    if (niche !== undefined) data.niche = niche || null;
+    const profile = await prisma.linkedInProfile.update({
+      where: { id },
+      data
+    });
+    res.json(profile);
+  } catch (error) {
+    if (error.code === 'P2025') {
+      res.status(404).json({ error: 'LinkedIn profile not found' });
+    } else if (error.code === 'P2002') {
+      res.status(409).json({ error: 'A LinkedIn profile with this name already exists' });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
+// Delete LinkedIn profile
+app.delete('/api/linkedin-profiles/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await prisma.linkedInProfile.delete({ where: { id } });
+    res.json({ success: true });
+  } catch (error) {
+    if (error.code === 'P2025') {
+      res.status(404).json({ error: 'LinkedIn profile not found' });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
+// ==================== SKILLS ====================
+
+// Get all skills
+app.get('/api/skills', async (req, res) => {
+  try {
+    const skills = await prisma.skill.findMany({
+      orderBy: { name: 'asc' }
+    });
+    res.json(skills);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get skill by ID
+app.get('/api/skills/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const skill = await prisma.skill.findUnique({ where: { id } });
+    if (!skill) {
+      return res.status(404).json({ error: 'Skill not found' });
+    }
+    res.json(skill);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create skill
+app.post('/api/skills', async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: 'Skill name is required' });
+    }
+    const skill = await prisma.skill.create({
+      data: { name: name.trim() }
+    });
+    res.status(201).json(skill);
+  } catch (error) {
+    if (error.code === 'P2002') {
+      res.status(409).json({ error: 'A skill with this name already exists' });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
+// Update skill
+app.put('/api/skills/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: 'Skill name is required' });
+    }
+    const skill = await prisma.skill.update({
+      where: { id },
+      data: { name: name.trim() }
+    });
+    res.json(skill);
+  } catch (error) {
+    if (error.code === 'P2025') {
+      res.status(404).json({ error: 'Skill not found' });
+    } else if (error.code === 'P2002') {
+      res.status(409).json({ error: 'A skill with this name already exists' });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
+// Delete skill
+app.delete('/api/skills/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await prisma.skill.delete({ where: { id } });
+    res.json({ success: true });
+  } catch (error) {
+    if (error.code === 'P2025') {
+      res.status(404).json({ error: 'Skill not found' });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
+// ==================== PROSPECTS ====================
+
 // Get all prospects
 app.get('/api/prospects', async (req, res) => {
   try {
@@ -201,6 +389,20 @@ app.get('/api/prospects/user/:userId', async (req, res) => {
       orderBy: {
         created_at: 'desc'
       }
+    });
+    res.json(prospects);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get prospects assigned to LH user (by lh_user_id)
+app.get('/api/prospects/lh/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const prospects = await prisma.prospect.findMany({
+      where: { lh_user_id: userId },
+      orderBy: { created_at: 'desc' }
     });
     res.json(prospects);
   } catch (error) {
