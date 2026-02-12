@@ -59,7 +59,11 @@ app.post('/api/auth/login', async (req, res) => {
     if (!email) return res.status(400).json({ error: 'Email is required' });
     const user = await prisma.user.findUnique({
       where: { email: email.trim().toLowerCase() },
-      select: { id: true, email: true, name: true, role: true, created_at: true }
+      select: {
+        id: true, email: true, name: true, role: true, created_at: true,
+        linkedin_profile_id: true,
+        linkedin_profile: { select: { id: true, name: true, niche: true } }
+      }
     });
     if (!user) {
       return res.status(401).json({ error: 'No account found with this email' });
@@ -402,6 +406,9 @@ app.get('/api/prospects/lh/:userId', async (req, res) => {
     const { userId } = req.params;
     const prospects = await prisma.prospect.findMany({
       where: { lh_user_id: userId },
+      include: {
+        linkedin_profile: { select: { id: true, name: true, niche: true } },
+      },
       orderBy: { created_at: 'desc' }
     });
     res.json(prospects);
