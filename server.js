@@ -16,6 +16,11 @@ if (!process.env.DIRECT_URL) {
 
 // Import Prisma client after env vars are loaded
 import prisma from './prisma/client.js';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
+const SALT_ROUNDS = 10;
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -52,7 +57,7 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Backend is running' });
 });
 
-// Login - email-based (no password for now)
+// Login - email-based (no password; for extension)
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email } = req.body;
@@ -74,9 +79,119 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+// Dashboard login - username or email + password, returns JWT
+app.post('/api/auth/dashboard-login', async (req, res) => {
+  try {
+    const { login, password } = req.body;
+    if (!login || !password) {
+      return res.status(400).json({ error: 'Username/email and password are required' });
+    }
+    const loginLower = login.trim().toLowerCase();
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { email: loginLower },
+          { username: { equals: login.trim(), mode: 'insensitive' } }
+        ]
+      },
+      select: {
+        id: true, email: true, username: true, name: true, role: true, created_at: true,
+        password_hash: true,
+        linkedin_profile_id: true,
+        linkedin_profile: { select: { id: true, name: true, niche: true } }
+      }
+    });
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid username/email or password' });
+    }
+    if (!user.password_hash) {
+      return res.status(401).json({ error: 'This account has no password set. Use Users & Roles to set one.' });
+    }
+    const match = await bcrypt.compare(password, user.password_hash);
+    if (!match) {
+      return res.status(401).json({ error: 'Invalid username/email or password' });
+    }
+    const { password_hash: _, ...safeUser } = user;
+    const token = jwt.sign(
+      { sub: user.id, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+    res.json({ user: safeUser, token });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Verify JWT for dashboard protected routes
+const authMiddleware = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  const token = authHeader.slice(7);
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    const user = await prisma.user.findUnique({
+      where: { id: payload.sub },
+      select: { id: true, email: true, username: true, name: true, role: true }
+    });
+    if (!user) return res.status(401).json({ error: 'User not found' });
+    req.authUser = user;
+    next();
+  } catch {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+};
+
+const requireAdmin = (req, res, next) => {
+  if (req.authUser?.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  next();
+};
+
+app.get('/api/auth/me', authMiddleware, (req, res) => {
+  res.json(req.authUser);
+});
+
+// Change own password (requires auth)
+app.post('/api/auth/change-password', authMiddleware, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Current password and new password are required' });
+    }
+    const newTrimmed = String(newPassword).trim();
+    if (newTrimmed.length < 6) {
+      return res.status(400).json({ error: 'New password must be at least 6 characters' });
+    }
+    const userWithHash = await prisma.user.findUnique({
+      where: { id: req.authUser.id },
+      select: { id: true, password_hash: true }
+    });
+    if (!userWithHash || !userWithHash.password_hash) {
+      return res.status(400).json({ error: 'This account has no password set' });
+    }
+    const match = await bcrypt.compare(String(currentPassword), userWithHash.password_hash);
+    if (!match) {
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+    const hash = await bcrypt.hash(newTrimmed, SALT_ROUNDS);
+    await prisma.user.update({
+      where: { id: req.authUser.id },
+      data: { password_hash: hash }
+    });
+    res.json({ success: true, message: 'Password updated' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 const USER_SELECT = {
   id: true,
   email: true,
+  username: true,
   name: true,
   role: true,
   linkedin_profile_id: true,
@@ -84,8 +199,8 @@ const USER_SELECT = {
   created_at: true
 };
 
-// Get all users
-app.get('/api/users', async (req, res) => {
+// Get all users (dashboard: require auth, admin only for write)
+app.get('/api/users', authMiddleware, async (req, res) => {
   try {
     const users = await prisma.user.findMany({
       select: USER_SELECT,
@@ -98,7 +213,7 @@ app.get('/api/users', async (req, res) => {
 });
 
 // Get user by ID
-app.get('/api/users/:id', async (req, res) => {
+app.get('/api/users/:id', authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
     const user = await prisma.user.findUnique({
@@ -116,20 +231,24 @@ app.get('/api/users/:id', async (req, res) => {
   }
 });
 
-// Create user
-app.post('/api/users', async (req, res) => {
+// Create user (admin only)
+app.post('/api/users', authMiddleware, requireAdmin, async (req, res) => {
   try {
-    const { email, name, role, linkedin_profile_id } = req.body;
+    const { email, username, name, role, linkedin_profile_id, password } = req.body;
     if (!email) return res.status(400).json({ error: 'Email is required' });
     if (role === 'LH' && !linkedin_profile_id) {
       return res.status(400).json({ error: 'LinkedIn Profile is required for LH role' });
     }
     const data = {
-      email,
+      email: email.trim().toLowerCase(),
+      username: username && String(username).trim() ? String(username).trim() : null,
       name: name || null,
       role: role || 'DC_R',
       linkedin_profile_id: linkedin_profile_id || null
     };
+    if (password && String(password).trim()) {
+      data.password_hash = await bcrypt.hash(String(password).trim(), SALT_ROUNDS);
+    }
     const user = await prisma.user.create({
       data,
       select: USER_SELECT
@@ -137,27 +256,33 @@ app.post('/api/users', async (req, res) => {
     res.status(201).json(user);
   } catch (error) {
     if (error.code === 'P2002') {
-      res.status(409).json({ error: 'A user with this email already exists' });
-    } else {
-      res.status(500).json({ error: error.message });
+      const target = error.meta?.target;
+      const msg = Array.isArray(target) && target.includes('username')
+        ? 'A user with this username already exists'
+        : 'A user with this email already exists';
+      return res.status(409).json({ error: msg });
     }
+    res.status(500).json({ error: error.message });
   }
 });
 
-// Update user
-app.put('/api/users/:id', async (req, res) => {
+// Update user (admin only)
+app.put('/api/users/:id', authMiddleware, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const { email, name, role, linkedin_profile_id } = req.body;
-    // If updating to LH, linkedin_profile_id must be provided (or already set)
+    const { email, username, name, role, linkedin_profile_id, password } = req.body;
     if (role === 'LH' && linkedin_profile_id === null) {
       return res.status(400).json({ error: 'LinkedIn Profile is required for LH role' });
     }
     const data = {};
-    if (email !== undefined) data.email = email;
+    if (email !== undefined) data.email = email.trim().toLowerCase();
+    if (username !== undefined) data.username = username && String(username).trim() ? String(username).trim() : null;
     if (name !== undefined) data.name = name;
     if (role !== undefined) data.role = role;
     if (linkedin_profile_id !== undefined) data.linkedin_profile_id = linkedin_profile_id || null;
+    if (password !== undefined && String(password).trim()) {
+      data.password_hash = await bcrypt.hash(String(password).trim(), SALT_ROUNDS);
+    }
     const user = await prisma.user.update({
       where: { id },
       data,
@@ -176,7 +301,7 @@ app.put('/api/users/:id', async (req, res) => {
 });
 
 // Delete user
-app.delete('/api/users/:id', async (req, res) => {
+app.delete('/api/users/:id', authMiddleware, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     await prisma.user.delete({ where: { id } });
@@ -363,6 +488,67 @@ app.delete('/api/skills/:id', async (req, res) => {
     } else {
       res.status(500).json({ error: error.message });
     }
+  }
+});
+
+// ==================== STATS (DC_R role) ====================
+// Aggregated counts only - no record fetching
+
+app.get('/api/stats/dc-r', async (req, res) => {
+  try {
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfWeek = new Date(startOfToday);
+    startOfWeek.setDate(startOfWeek.getDate() - 7);
+    const endOfToday = new Date(startOfToday);
+    endOfToday.setDate(endOfToday.getDate() + 1);
+
+    const [totalProspects, todaysProspects, thisWeeksProspects, assignedLeads] = await Promise.all([
+      prisma.prospect.count(),
+      prisma.prospect.count({
+        where: {
+          created_at: { gte: startOfToday, lt: endOfToday },
+        },
+      }),
+      prisma.prospect.count({
+        where: {
+          created_at: { gte: startOfWeek },
+        },
+      }),
+      prisma.prospect.count({
+        where: {
+          lh_user_id: { not: null },
+        },
+      }),
+    ]);
+
+    res.json({
+      totalProspects,
+      todaysProspects,
+      thisWeeksProspects,
+      assignedLeads,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Top 3 prospect sources: count per source via DB aggregation, sorted desc, limit 3
+app.get('/api/stats/top-sources', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 3, 20);
+    // Aggregation, sort, and limit done in the database
+    const rows = await prisma.$queryRaw`
+      SELECT sources AS source, COUNT(*)::int AS count
+      FROM "Prospect"
+      WHERE sources IS NOT NULL
+      GROUP BY sources
+      ORDER BY count DESC
+      LIMIT ${limit}
+    `;
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
