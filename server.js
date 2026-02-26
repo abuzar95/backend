@@ -533,6 +533,47 @@ app.get('/api/stats/dc-r', async (req, res) => {
   }
 });
 
+// ==================== STATS (LH role) ====================
+// Aggregated counts only - no record fetching
+
+app.get('/api/stats/lh', async (req, res) => {
+  try {
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const endOfToday = new Date(startOfToday);
+    endOfToday.setDate(endOfToday.getDate() + 1);
+
+    const [totalAssignedProspects, totalLCProspects, totalLNCProspects, todaysTasks] = await Promise.all([
+      prisma.prospect.count({
+        where: {
+          status: 'data_refined',
+          lh_user_id: { not: null },
+        },
+      }),
+      prisma.prospect.count({
+        where: { status: { in: ['LC', 'B_LC'] } },
+      }),
+      prisma.prospect.count({
+        where: { status: { in: ['LNC', 'B_LNC'] } },
+      }),
+      prisma.prospect.count({
+        where: {
+          next_follow_up_date: { gte: startOfToday, lt: endOfToday },
+        },
+      }),
+    ]);
+
+    res.json({
+      totalAssignedProspects,
+      totalLCProspects,
+      totalLNCProspects,
+      todaysTasks,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Top 3 prospect sources: count per source via DB aggregation, sorted desc, limit 3
 app.get('/api/stats/top-sources', async (req, res) => {
   try {
@@ -552,15 +593,154 @@ app.get('/api/stats/top-sources', async (req, res) => {
   }
 });
 
+// Prospects by category: count per category with optional min lead_score filter (DB aggregation only)
+app.get('/api/stats/prospects-by-category', async (req, res) => {
+  try {
+    const minScoreParam = req.query.minLeadScore;
+    const where = {};
+    if (minScoreParam !== undefined && minScoreParam !== '' && minScoreParam !== null) {
+      const minScore = parseInt(String(minScoreParam), 10);
+      if (!Number.isNaN(minScore)) {
+        where.lead_score = { gte: minScore };
+      }
+    }
+    const rows = await prisma.prospect.groupBy({
+      by: ['category'],
+      where,
+      _count: { id: true },
+    });
+    const result = rows
+      .map((r) => ({
+        category: r.category == null ? 'Uncategorized' : r.category,
+        count: r._count.id,
+      }))
+      .sort((a, b) => (a.category === 'Uncategorized' ? 1 : b.category === 'Uncategorized' ? -1 : a.category.localeCompare(b.category)));
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==================== STATS (User Performance & Prospect Tracking) ====================
+// All aggregation only - no full record fetch
+
+function getDateRanges() {
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const endOfToday = new Date(startOfToday);
+  endOfToday.setDate(endOfToday.getDate() + 1);
+  const startOfWeek = new Date(startOfToday);
+  startOfWeek.setDate(startOfWeek.getDate() - 7);
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  return { startOfToday, endOfToday, startOfWeek, startOfMonth };
+}
+
+// User activity: prospects captured by each DC_R user (today, this week, this month)
+app.get('/api/stats/user-activity', async (req, res) => {
+  try {
+    const { startOfToday, endOfToday, startOfWeek, startOfMonth } = getDateRanges();
+    const [dcRUsers, todayCounts, weekCounts, monthCounts] = await Promise.all([
+      prisma.user.findMany({
+        where: { role: 'DC_R' },
+        select: { id: true, name: true, email: true },
+        orderBy: { name: 'asc' },
+      }),
+      prisma.prospect.groupBy({
+        by: ['user_id'],
+        where: { created_at: { gte: startOfToday, lt: endOfToday } },
+        _count: { id: true },
+      }),
+      prisma.prospect.groupBy({
+        by: ['user_id'],
+        where: { created_at: { gte: startOfWeek } },
+        _count: { id: true },
+      }),
+      prisma.prospect.groupBy({
+        by: ['user_id'],
+        where: { created_at: { gte: startOfMonth } },
+        _count: { id: true },
+      }),
+    ]);
+    const toMap = (arr) => Object.fromEntries(arr.map((r) => [r.user_id, r._count.id]));
+    const todayMap = toMap(todayCounts);
+    const weekMap = toMap(weekCounts);
+    const monthMap = toMap(monthCounts);
+    const result = dcRUsers.map((u) => ({
+      userId: u.id,
+      name: u.name || u.email || '—',
+      email: u.email,
+      today: todayMap[u.id] ?? 0,
+      thisWeek: weekMap[u.id] ?? 0,
+      thisMonth: monthMap[u.id] ?? 0,
+    }));
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Stage conversion: LNC → LC today (status in LC/B_LC and updated_at today), and all-time LC/B_LC count
+app.get('/api/stats/stage-conversion', async (req, res) => {
+  try {
+    const { startOfToday, endOfToday } = getDateRanges();
+    const [lncToLcToday, lncToLcAllTime] = await Promise.all([
+      prisma.prospect.count({
+        where: {
+          status: { in: ['LC', 'B_LC'] },
+          updated_at: { gte: startOfToday, lt: endOfToday },
+        },
+      }),
+      prisma.prospect.count({
+        where: { status: { in: ['LC', 'B_LC'] } },
+      }),
+    ]);
+    res.json({ lncToLcToday, lncToLcAllTime });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Prospect counts by stage: total and per-status (DB aggregation only)
+app.get('/api/stats/prospects-by-stage', async (req, res) => {
+  try {
+    const [total, byStatusRows] = await Promise.all([
+      prisma.prospect.count(),
+      prisma.prospect.groupBy({
+        by: ['status'],
+        _count: { id: true },
+      }),
+    ]);
+    const byStage = byStatusRows.map((r) => ({ stage: r.status, count: r._count.id }));
+    res.json({ total, byStage });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ==================== PROSPECTS ====================
 
-// Get all prospects
+// Get all prospects (optional ?status=... to filter; ?assigned=true = only lh_user_id not null)
+// No date filter — returns all prospects with the given status, including previous and updated
 app.get('/api/prospects', async (req, res) => {
   try {
-    const prospects = await prisma.prospect.findMany({
-      orderBy: {
-        created_at: 'desc'
+    const statusParam = req.query.status;
+    const assignedOnly = req.query.assigned === 'true' || req.query.assigned === '1';
+    const where = {};
+    if (statusParam && typeof statusParam === 'string') {
+      const statuses = statusParam.split(',').map((s) => s.trim()).filter(Boolean);
+      if (statuses.length > 0) {
+        where.status = { in: statuses };
       }
+    }
+    if (assignedOnly) {
+      where.lh_user_id = { not: null };
+    }
+    const prospects = await prisma.prospect.findMany({
+      where,
+      include: {
+        linkedin_profile: { select: { id: true, name: true, niche: true } },
+      },
+      orderBy: [{ updated_at: 'desc' }, { created_at: 'desc' }]
     });
     res.json(prospects);
   } catch (error) {
@@ -587,6 +767,7 @@ app.get('/api/prospects/user/:userId', async (req, res) => {
 });
 
 // Get prospects assigned to LH user (by lh_user_id)
+// No date filter — returns all assigned prospects regardless of when they were assigned
 app.get('/api/prospects/lh/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
@@ -595,7 +776,7 @@ app.get('/api/prospects/lh/:userId', async (req, res) => {
       include: {
         linkedin_profile: { select: { id: true, name: true, niche: true } },
       },
-      orderBy: { created_at: 'desc' }
+      orderBy: [{ updated_at: 'desc' }, { created_at: 'desc' }]
     });
     res.json(prospects);
   } catch (error) {
