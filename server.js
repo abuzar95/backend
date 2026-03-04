@@ -784,6 +784,26 @@ app.get('/api/prospects/lh/:userId', async (req, res) => {
   }
 });
 
+// Get single prospect by id (must be after /user/ and /lh/ routes)
+app.get('/api/prospects/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const prospect = await prisma.prospect.findUnique({
+      where: { id },
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+        lh_user: { select: { id: true, name: true, email: true } },
+        em_user: { select: { id: true, name: true, email: true } },
+        linkedin_profile: { select: { id: true, name: true, niche: true } },
+      },
+    });
+    if (!prospect) return res.status(404).json({ error: 'Prospect not found' });
+    res.json(prospect);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Create new prospect
 app.post('/api/prospects', async (req, res) => {
   try {
