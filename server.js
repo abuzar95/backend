@@ -679,6 +679,44 @@ app.get('/api/stats/user-activity', async (req, res) => {
   }
 });
 
+// LH user activity: per-LH-user stats (assigned, LC, LNC, today's tasks)
+app.get('/api/stats/lh-user-activity', async (req, res) => {
+  try {
+    const { startOfToday, endOfToday } = getDateRanges();
+    const lhUsers = await prisma.user.findMany({
+      where: { role: 'LH' },
+      select: { id: true, name: true, email: true },
+      orderBy: { name: 'asc' },
+    });
+    const result = [];
+    for (const u of lhUsers) {
+      const [assigned, lc, lnc, todaysTasks] = await Promise.all([
+        prisma.prospect.count({ where: { lh_user_id: u.id, status: 'data_refined' } }),
+        prisma.prospect.count({ where: { lh_user_id: u.id, status: { in: ['LC', 'B_LC'] } } }),
+        prisma.prospect.count({ where: { lh_user_id: u.id, status: { in: ['LNC', 'B_LNC'] } } }),
+        prisma.prospect.count({
+          where: {
+            lh_user_id: u.id,
+            next_follow_up_date: { gte: startOfToday, lt: endOfToday },
+          },
+        }),
+      ]);
+      result.push({
+        userId: u.id,
+        name: u.name || u.email || '—',
+        email: u.email,
+        assigned,
+        lc,
+        lnc,
+        todaysTasks,
+      });
+    }
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Stage conversion: LNC → LC today (status in LC/B_LC and updated_at today), and all-time LC/B_LC count
 app.get('/api/stats/stage-conversion', async (req, res) => {
   try {
