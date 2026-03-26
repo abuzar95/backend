@@ -66,6 +66,7 @@ app.post('/api/auth/login', async (req, res) => {
       where: { email: email.trim().toLowerCase() },
       select: {
         id: true, email: true, name: true, role: true, created_at: true,
+        em_prospect_type: true,
         linkedin_profile_id: true,
         linkedin_profile: { select: { id: true, name: true, niche: true } }
       }
@@ -96,6 +97,7 @@ app.post('/api/auth/dashboard-login', async (req, res) => {
       },
       select: {
         id: true, email: true, username: true, name: true, role: true, created_at: true,
+        em_prospect_type: true,
         password_hash: true,
         linkedin_profile_id: true,
         linkedin_profile: { select: { id: true, name: true, niche: true } }
@@ -134,7 +136,7 @@ const authMiddleware = async (req, res, next) => {
     const payload = jwt.verify(token, JWT_SECRET);
     const user = await prisma.user.findUnique({
       where: { id: payload.sub },
-      select: { id: true, email: true, username: true, name: true, role: true }
+      select: { id: true, email: true, username: true, name: true, role: true, em_prospect_type: true }
     });
     if (!user) return res.status(401).json({ error: 'User not found' });
     req.authUser = user;
@@ -194,6 +196,7 @@ const USER_SELECT = {
   username: true,
   name: true,
   role: true,
+  em_prospect_type: true,
   linkedin_profile_id: true,
   linkedin_profile: { select: { id: true, name: true, niche: true } },
   created_at: true
@@ -234,16 +237,20 @@ app.get('/api/users/:id', authMiddleware, async (req, res) => {
 // Create user (admin only)
 app.post('/api/users', authMiddleware, requireAdmin, async (req, res) => {
   try {
-    const { email, username, name, role, linkedin_profile_id, password } = req.body;
+    const { email, username, name, role, em_prospect_type, linkedin_profile_id, password } = req.body;
     if (!email) return res.status(400).json({ error: 'Email is required' });
     if (role === 'LH' && !linkedin_profile_id) {
       return res.status(400).json({ error: 'LinkedIn Profile is required for LH role' });
+    }
+    if (role === 'EM' && !['business', 'individual'].includes(String(em_prospect_type || ''))) {
+      return res.status(400).json({ error: 'EM prospect type is required for EM role' });
     }
     const data = {
       email: email.trim().toLowerCase(),
       username: username && String(username).trim() ? String(username).trim() : null,
       name: name || null,
       role: role || 'DC_R',
+      em_prospect_type: role === 'EM' ? em_prospect_type : null,
       linkedin_profile_id: linkedin_profile_id || null
     };
     if (password && String(password).trim()) {
@@ -270,15 +277,20 @@ app.post('/api/users', authMiddleware, requireAdmin, async (req, res) => {
 app.put('/api/users/:id', authMiddleware, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const { email, username, name, role, linkedin_profile_id, password } = req.body;
+    const { email, username, name, role, em_prospect_type, linkedin_profile_id, password } = req.body;
     if (role === 'LH' && linkedin_profile_id === null) {
       return res.status(400).json({ error: 'LinkedIn Profile is required for LH role' });
+    }
+    if (role === 'EM' && !['business', 'individual'].includes(String(em_prospect_type || ''))) {
+      return res.status(400).json({ error: 'EM prospect type is required for EM role' });
     }
     const data = {};
     if (email !== undefined) data.email = email.trim().toLowerCase();
     if (username !== undefined) data.username = username && String(username).trim() ? String(username).trim() : null;
     if (name !== undefined) data.name = name;
     if (role !== undefined) data.role = role;
+    if (em_prospect_type !== undefined) data.em_prospect_type = em_prospect_type || null;
+    if (role !== undefined && role !== 'EM' && em_prospect_type === undefined) data.em_prospect_type = null;
     if (linkedin_profile_id !== undefined) data.linkedin_profile_id = linkedin_profile_id || null;
     if (password !== undefined && String(password).trim()) {
       data.password_hash = await bcrypt.hash(String(password).trim(), SALT_ROUNDS);

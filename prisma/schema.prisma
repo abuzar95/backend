@@ -62,6 +62,11 @@ enum IntentCategory {
   Both
 }
 
+enum EMProspectType {
+  business
+  individual
+}
+
 model LinkedInProfile {
   id         String          @id @default(uuid())
   name       String          @unique // e.g. "Sabeeh - CTO"
@@ -80,6 +85,7 @@ model User {
   name                 String?
   password_hash        String?          // Bcrypt hash for dashboard auth
   role                 UserRole         @default(DC_R)
+  em_prospect_type     EMProspectType?
   linkedin_profile_id  String?          // Required when role is LH
   created_at           DateTime         @default(now())
   updated_at           DateTime         @updatedAt
@@ -92,6 +98,7 @@ model User {
   @@index([email])
   @@index([username])
   @@index([role])
+  @@index([em_prospect_type])
   @@index([linkedin_profile_id])
 }
 
@@ -145,6 +152,12 @@ model Prospect {
   job_title             String?
   company_size          String?
   location              String?
+  last_contacted_at_em  DateTime?
+  lead_score_em         Int?
+  pitched_description_em String?
+  next_follow_up_em     DateTime?
+  response_lh           Boolean?  @default(false)
+  response_em           Boolean?  @default(false)
 
   // Relations
   user                  User              @relation("ProspectCreator", fields: [user_id], references: [id], onDelete: Cascade)
