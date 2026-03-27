@@ -1,0 +1,23 @@
+name: Daily Follow-up Rollover
+
+on:
+  schedule:
+    # 19:05 UTC = 00:05 PKT (next day)
+    - cron: "5 19 * * *"
+  workflow_dispatch:
+
+jobs:
+  trigger-rollover:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call rollover endpoint
+        run: |
+          STATUS=$(curl -s -o response.json -w "%{http_code}" \
+            -X POST "${{ secrets.CRON_URL }}" \
+            -H "Content-Type: application/json" \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}")
+          echo "HTTP $STATUS"
+          cat response.json
+          if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 300 ]; then
+            exit 1
+          fi
