@@ -662,6 +662,7 @@ function getPktDayRange(referenceDate = new Date()) {
     startOfPktDayUtc: new Date(startUtcMs),
     endOfPktDayUtc: new Date(endUtcMs),
     nextPktDayUtc: new Date(endUtcMs),
+    nextPktDayPlus5MinUtc: new Date(endUtcMs + 5 * 60 * 1000),
   };
 }
 
@@ -794,7 +795,7 @@ app.post('/api/cron/rollover-followups', async (req, res) => {
     if (!secret) return res.status(500).json({ error: 'CRON_SECRET not configured' });
     if (!headerSecret || headerSecret !== secret) return res.status(401).json({ error: 'Unauthorized' });
 
-    const { startOfPktDayUtc, endOfPktDayUtc, nextPktDayUtc } = getPktDayRange();
+    const { startOfPktDayUtc, endOfPktDayUtc, nextPktDayUtc, nextPktDayPlus5MinUtc } = getPktDayRange();
 
     // LH task rollover candidates:
     // - Due today (PKT) on LH follow-up date
@@ -834,13 +835,13 @@ app.post('/api/cron/rollover-followups', async (req, res) => {
       lhCandidates.length
         ? prisma.prospect.updateMany({
             where: { id: { in: lhCandidates.map((p) => p.id) } },
-            data: { next_follow_up_date: nextPktDayUtc },
+            data: { next_follow_up_date: nextPktDayPlus5MinUtc },
           })
         : Promise.resolve({ count: 0 }),
       emCandidates.length
         ? prisma.prospect.updateMany({
             where: { id: { in: emCandidates.map((p) => p.id) } },
-            data: { next_follow_up_em: nextPktDayUtc },
+            data: { next_follow_up_em: nextPktDayPlus5MinUtc },
           })
         : Promise.resolve({ count: 0 }),
     ]);
@@ -856,6 +857,7 @@ app.post('/api/cron/rollover-followups', async (req, res) => {
         startOfPktDayUtc: startOfPktDayUtc.toISOString(),
         endOfPktDayUtc: endOfPktDayUtc.toISOString(),
         nextPktDayUtc: nextPktDayUtc.toISOString(),
+        nextPktDayPlus5MinUtc: nextPktDayPlus5MinUtc.toISOString(),
       },
     });
   } catch (error) {

@@ -2,8 +2,8 @@ name: Daily Follow-up Rollover
 
 on:
   schedule:
-    # 19:05 UTC = 00:05 PKT (next day)
-    - cron: "5 19 * * *"
+    # 18:55 UTC = 23:55 PKT
+    - cron: "55 18 * * *"
   workflow_dispatch:
 
 jobs:
