@@ -803,7 +803,8 @@ app.post('/api/cron/rollover-followups', async (req, res) => {
     const lhCandidates = await prisma.prospect.findMany({
       where: {
         status: { in: ['LC', 'B_LC', 'LNC', 'B_LNC'] },
-        next_follow_up_date: { gte: startOfPktDayUtc, lt: endOfPktDayUtc },
+        // Include exact boundary timestamps (e.g. 19:00:00 UTC for PKT midnight)
+        next_follow_up_date: { gte: startOfPktDayUtc, lte: endOfPktDayUtc },
         OR: [
           { last_contacted_at: null },
           { last_contacted_at: { lt: startOfPktDayUtc } },
@@ -818,7 +819,8 @@ app.post('/api/cron/rollover-followups', async (req, res) => {
     // - Not contacted today (PKT)
     const emCandidates = await prisma.prospect.findMany({
       where: {
-        next_follow_up_em: { gte: startOfPktDayUtc, lt: endOfPktDayUtc },
+        // Include exact boundary timestamps (e.g. 19:00:00 UTC for PKT midnight)
+        next_follow_up_em: { gte: startOfPktDayUtc, lte: endOfPktDayUtc },
         OR: [
           { last_contacted_at_em: null },
           { last_contacted_at_em: { lt: startOfPktDayUtc } },
