@@ -24,7 +24,6 @@ const SALT_ROUNDS = 10;
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-const PKT_OFFSET_MS = 5 * 60 * 60 * 1000; // Asia/Karachi (UTC+5, no DST)
 
 // Middleware
 const allowedOrigins = process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3000'];
@@ -648,23 +647,6 @@ function getDateRanges() {
   return { startOfToday, endOfToday, startOfWeek, startOfMonth };
 }
 
-function getPktDayRange(referenceDate = new Date()) {
-  // Convert UTC now -> pseudo PKT date by adding +5h, then derive PKT day boundaries.
-  const pktNow = new Date(referenceDate.getTime() + PKT_OFFSET_MS);
-  const y = pktNow.getUTCFullYear();
-  const m = pktNow.getUTCMonth();
-  const d = pktNow.getUTCDate();
-
-  // PKT midnight converted back to UTC by subtracting the fixed offset.
-  const startUtcMs = Date.UTC(y, m, d, 0, 0, 0, 0) - PKT_OFFSET_MS;
-  const endUtcMs = startUtcMs + 24 * 60 * 60 * 1000;
-  return {
-    startOfPktDayUtc: new Date(startUtcMs),
-    endOfPktDayUtc: new Date(endUtcMs),
-    nextPktDayUtc: new Date(endUtcMs),
-    nextPktDayPlus5MinUtc: new Date(endUtcMs + 5 * 60 * 1000),
-  };
-}
 
 // User activity: prospects captured by each DC_R user (today, this week, this month)
 app.get('/api/stats/user-activity', async (req, res) => {
@@ -781,85 +763,6 @@ app.get('/api/stats/prospects-by-stage', async (req, res) => {
     ]);
     const byStage = byStatusRows.map((r) => ({ stage: r.status, count: r._count.id }));
     res.json({ total, byStage });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Daily rollover (PKT): move pending today's follow-ups to tomorrow.
-// Designed to be triggered by GitHub Actions cron.
-app.post('/api/cron/rollover-followups', async (req, res) => {
-  try {
-    const secret = process.env.CRON_SECRET;
-    const headerSecret = req.headers['x-cron-secret'];
-    if (!secret) return res.status(500).json({ error: 'CRON_SECRET not configured' });
-    if (!headerSecret || headerSecret !== secret) return res.status(401).json({ error: 'Unauthorized' });
-
-    const { startOfPktDayUtc, endOfPktDayUtc, nextPktDayUtc, nextPktDayPlus5MinUtc } = getPktDayRange();
-
-    // LH task rollover candidates:
-    // - Due today (PKT) on LH follow-up date
-    // - In LH task statuses
-    // - Not contacted today (PKT)
-    const lhCandidates = await prisma.prospect.findMany({
-      where: {
-        status: { in: ['LC', 'B_LC', 'LNC', 'B_LNC'] },
-        // Include exact boundary timestamps (e.g. 19:00:00 UTC for PKT midnight)
-        next_follow_up_date: { gte: startOfPktDayUtc, lte: endOfPktDayUtc },
-        OR: [
-          { last_contacted_at: null },
-          { last_contacted_at: { lt: startOfPktDayUtc } },
-          { last_contacted_at: { gte: endOfPktDayUtc } },
-        ],
-      },
-      select: { id: true },
-    });
-
-    // EM task rollover candidates:
-    // - Due today (PKT) on EM follow-up date
-    // - Not contacted today (PKT)
-    const emCandidates = await prisma.prospect.findMany({
-      where: {
-        // Include exact boundary timestamps (e.g. 19:00:00 UTC for PKT midnight)
-        next_follow_up_em: { gte: startOfPktDayUtc, lte: endOfPktDayUtc },
-        OR: [
-          { last_contacted_at_em: null },
-          { last_contacted_at_em: { lt: startOfPktDayUtc } },
-          { last_contacted_at_em: { gte: endOfPktDayUtc } },
-        ],
-      },
-      select: { id: true },
-    });
-
-    const [lhResult, emResult] = await Promise.all([
-      lhCandidates.length
-        ? prisma.prospect.updateMany({
-            where: { id: { in: lhCandidates.map((p) => p.id) } },
-            data: { next_follow_up_date: nextPktDayPlus5MinUtc },
-          })
-        : Promise.resolve({ count: 0 }),
-      emCandidates.length
-        ? prisma.prospect.updateMany({
-            where: { id: { in: emCandidates.map((p) => p.id) } },
-            data: { next_follow_up_em: nextPktDayPlus5MinUtc },
-          })
-        : Promise.resolve({ count: 0 }),
-    ]);
-
-    res.json({
-      success: true,
-      timezone: 'PKT',
-      rolled: {
-        lh: lhResult.count,
-        em: emResult.count,
-      },
-      window: {
-        startOfPktDayUtc: startOfPktDayUtc.toISOString(),
-        endOfPktDayUtc: endOfPktDayUtc.toISOString(),
-        nextPktDayUtc: nextPktDayUtc.toISOString(),
-        nextPktDayPlus5MinUtc: nextPktDayPlus5MinUtc.toISOString(),
-      },
-    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
