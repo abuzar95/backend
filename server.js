@@ -503,17 +503,28 @@ app.delete('/api/skills/:id', async (req, res) => {
   }
 });
 
+const PKT_UTC_OFFSET_MS = 5 * 60 * 60 * 1000;
+const PKT_DAY_PARTS = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Karachi',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+const getPktDayKey = (date = new Date()) => PKT_DAY_PARTS.format(date);
+
+const dayKeyToUtcStart = (dayKey) => {
+  const [year, month, day] = String(dayKey).split('-').map(Number);
+  const pktMidnightUtcMs = Date.UTC(year, month - 1, day) - PKT_UTC_OFFSET_MS;
+  return new Date(pktMidnightUtcMs);
+};
+
 // ==================== STATS (DC_R role) ====================
 // Aggregated counts only - no record fetching
 
 app.get('/api/stats/dc-r', async (req, res) => {
   try {
-    const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const startOfWeek = new Date(startOfToday);
-    startOfWeek.setDate(startOfWeek.getDate() - 7);
-    const endOfToday = new Date(startOfToday);
-    endOfToday.setDate(endOfToday.getDate() + 1);
+    const { startOfToday, endOfToday, startOfWeek } = getDateRanges();
 
     const [totalProspects, todaysProspects, thisWeeksProspects, assignedLeads] = await Promise.all([
       prisma.prospect.count(),
@@ -550,10 +561,7 @@ app.get('/api/stats/dc-r', async (req, res) => {
 
 app.get('/api/stats/lh', async (req, res) => {
   try {
-    const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const endOfToday = new Date(startOfToday);
-    endOfToday.setDate(endOfToday.getDate() + 1);
+    const { startOfToday, endOfToday } = getDateRanges();
 
     const [totalAssignedProspects, totalLCProspects, totalLNCProspects, todaysTasks] = await Promise.all([
       prisma.prospect.count({
@@ -638,12 +646,14 @@ app.get('/api/stats/prospects-by-category', async (req, res) => {
 
 function getDateRanges() {
   const now = new Date();
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const endOfToday = new Date(startOfToday);
-  endOfToday.setDate(endOfToday.getDate() + 1);
+  const todayKeyPkt = getPktDayKey(now);
+  const startOfToday = dayKeyToUtcStart(todayKeyPkt);
+  const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
   const startOfWeek = new Date(startOfToday);
   startOfWeek.setDate(startOfWeek.getDate() - 7);
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const [pktYear, pktMonth] = String(todayKeyPkt).split('-').map(Number);
+  const monthStartKey = `${pktYear}-${String(pktMonth).padStart(2, '0')}-01`;
+  const startOfMonth = dayKeyToUtcStart(monthStartKey);
   return { startOfToday, endOfToday, startOfWeek, startOfMonth };
 }
 
