@@ -563,10 +563,9 @@ app.get('/api/stats/lh', async (req, res) => {
   try {
     const { startOfToday, endOfToday } = getDateRanges();
 
-    const [totalAssignedProspects, totalLCProspects, totalLNCProspects, todaysTasks] = await Promise.all([
+    const [totalAssignedProspects, totalLCProspects, totalLNCProspects, todaysTasks, overdueTasks] = await Promise.all([
       prisma.prospect.count({
         where: {
-          status: 'data_refined',
           lh_user_id: { not: null },
         },
       }),
@@ -578,7 +577,14 @@ app.get('/api/stats/lh', async (req, res) => {
       }),
       prisma.prospect.count({
         where: {
+          lh_user_id: { not: null },
           next_follow_up_date: { gte: startOfToday, lt: endOfToday },
+        },
+      }),
+      prisma.prospect.count({
+        where: {
+          lh_user_id: { not: null },
+          next_follow_up_date: { lt: startOfToday },
         },
       }),
     ]);
@@ -588,6 +594,7 @@ app.get('/api/stats/lh', async (req, res) => {
       totalLCProspects,
       totalLNCProspects,
       todaysTasks,
+      overdueTasks,
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -702,7 +709,7 @@ app.get('/api/stats/user-activity', async (req, res) => {
   }
 });
 
-// LH user activity: per-LH-user stats (assigned, LC, LNC, today's tasks)
+// LH user activity: per-LH-user stats (assigned, LC, LNC, today's tasks, overdue tasks)
 app.get('/api/stats/lh-user-activity', async (req, res) => {
   try {
     const { startOfToday, endOfToday } = getDateRanges();
@@ -713,14 +720,20 @@ app.get('/api/stats/lh-user-activity', async (req, res) => {
     });
     const result = [];
     for (const u of lhUsers) {
-      const [assigned, lc, lnc, todaysTasks] = await Promise.all([
-        prisma.prospect.count({ where: { lh_user_id: u.id, status: 'data_refined' } }),
+      const [assigned, lc, lnc, todaysTasks, overdueTasks] = await Promise.all([
+        prisma.prospect.count({ where: { lh_user_id: u.id } }),
         prisma.prospect.count({ where: { lh_user_id: u.id, status: { in: ['LC', 'B_LC'] } } }),
         prisma.prospect.count({ where: { lh_user_id: u.id, status: { in: ['LNC', 'B_LNC'] } } }),
         prisma.prospect.count({
           where: {
             lh_user_id: u.id,
             next_follow_up_date: { gte: startOfToday, lt: endOfToday },
+          },
+        }),
+        prisma.prospect.count({
+          where: {
+            lh_user_id: u.id,
+            next_follow_up_date: { lt: startOfToday },
           },
         }),
       ]);
@@ -732,6 +745,7 @@ app.get('/api/stats/lh-user-activity', async (req, res) => {
         lc,
         lnc,
         todaysTasks,
+        overdueTasks,
       });
     }
     res.json(result);
@@ -865,15 +879,57 @@ app.get('/api/prospects/:id', async (req, res) => {
   }
 });
 
+const normalizeText = (v) => (typeof v === 'string' ? v.trim() : v);
+const hasValue = (v) => typeof v === 'string' ? v.trim() !== '' : v != null;
+
+async function validateLhAssignment(lhUserId, intentCategory) {
+  if (!lhUserId) return;
+  if (!intentCategory) return;
+  const lhUser = await prisma.user.findUnique({
+    where: { id: lhUserId },
+    include: { linkedin_profile: true },
+  });
+  if (!lhUser || lhUser.role !== 'LH') {
+    const err = new Error('Selected user is not a valid LH user');
+    err.statusCode = 400;
+    throw err;
+  }
+  const userNiche = lhUser.linkedin_profile?.niche || null;
+  if (!userNiche || String(userNiche) !== String(intentCategory)) {
+    const err = new Error(`LH user niche (${userNiche || 'none'}) does not match prospect intent category (${intentCategory})`);
+    err.statusCode = 400;
+    throw err;
+  }
+}
+
+function applyEmailStatusTransition(previousStatus, nextStatus, previousEmail, nextEmail) {
+  const status = nextStatus || previousStatus;
+  const hadEmail = hasValue(previousEmail);
+  const hasEmailNow = hasValue(nextEmail);
+  if (!hadEmail && hasEmailNow) {
+    if (status === 'LNC') return 'B_LNC';
+    if (status === 'LC') return 'B_LC';
+  }
+  return nextStatus;
+}
+
 // Create new prospect
 app.post('/api/prospects', async (req, res) => {
   try {
+    const data = { ...req.body };
+    if (data.email !== undefined && data.email !== null) data.email = normalizeText(data.email) || null;
+    if (data.name !== undefined && data.name !== null) data.name = normalizeText(data.name) || null;
+    if (data.company_name !== undefined && data.company_name !== null) data.company_name = normalizeText(data.company_name) || null;
+    if (data.intent_category && data.lh_user_id) {
+      await validateLhAssignment(data.lh_user_id, data.intent_category);
+    }
+    data.status = applyEmailStatusTransition(null, data.status, null, data.email) || data.status;
     const prospect = await prisma.prospect.create({
-      data: req.body
+      data
     });
     res.status(201).json(prospect);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(error.statusCode || 500).json({ error: error.message });
   }
 });
 
@@ -881,11 +937,36 @@ app.post('/api/prospects', async (req, res) => {
 app.put('/api/prospects/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const existing = await prisma.prospect.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Prospect not found' });
+    const data = { ...req.body };
+    if (data.email !== undefined) data.email = normalizeText(data.email) || null;
+    if (data.name !== undefined) data.name = normalizeText(data.name) || null;
+    if (data.company_name !== undefined) data.company_name = normalizeText(data.company_name) || null;
+    const targetIntentCategory = data.intent_category !== undefined ? data.intent_category : existing.intent_category;
+    const targetLhUser = data.lh_user_id !== undefined ? data.lh_user_id : existing.lh_user_id;
+    await validateLhAssignment(targetLhUser, targetIntentCategory);
+    data.status = applyEmailStatusTransition(existing.status, data.status, existing.email, data.email);
     const prospect = await prisma.prospect.update({
       where: { id },
-      data: req.body
+      data
     });
     res.json(prospect);
+  } catch (error) {
+    if (error.code === 'P2025') {
+      res.status(404).json({ error: 'Prospect not found' });
+    } else {
+      res.status(error.statusCode || 500).json({ error: error.message });
+    }
+  }
+});
+
+// Delete prospect
+app.delete('/api/prospects/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await prisma.prospect.delete({ where: { id } });
+    res.json({ success: true });
   } catch (error) {
     if (error.code === 'P2025') {
       res.status(404).json({ error: 'Prospect not found' });
